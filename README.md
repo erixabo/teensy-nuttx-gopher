@@ -9,8 +9,15 @@ paranccsal más selector is megadható.
 
 ## Képernyő és vezérlés
 
-80×24 karakteres terminálra készült. A felső sor keretben mutatja az aktuális
-URL-t. A menüben fel/le nyíl vagy Tab/Shift-Tab léptet, Enter vagy jobbra nyíl
+Alapból a Telnet terminál által közölt méretet használja (NAWS), soros
+konzolon vagy méretadat nélkül 80×24 karakterre áll vissza. A méretet
+40×12 és 160×60 közé korlátozza a kliens memóriakerete. A `v` helyi nézetmenü
+automatikus, 80×24, 100×30 és 120×40 elrendezést kínál; a választás csak az
+aktuális futásra szól. A fix méret a kliens tördelését állítja, a távoli
+terminálablakot nem tudja átméretezni. Az új mérethez az aktuális Gopher-oldalt
+újra lekéri.
+
+A felső sor keretben mutatja az aktuális URL-t. A menüben fel/le nyíl vagy Tab/Shift-Tab léptet, Enter vagy jobbra nyíl
 megnyitja a kijelölt elemet. Balra nyíl vagy `b` visszalép, `q` vagy Ctrl-C
 kilép. Hosszú menü és szöveges oldal PgUp/PgDn billentyűkkel lapozható; Home/End
 a menü elejére/végére ugrik. A Gopher type 7 kereséshez külön beviteli mező van.

@@ -10,10 +10,12 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/select.h>
 #include <termios.h>
+#include <nuttx/serial/tioctl.h>
 
 #include <ctype.h>
 #include <errno.h>
@@ -38,13 +40,21 @@
 #define GOPHER_RECV_TIMEOUT_SEC   8
 #define GOPHER_RECV_BUFFER_SIZE   256
 
-#define SCREEN_COLS               80
-#define SCREEN_ROWS               24
+#define SCREEN_MIN_COLS           40
+#define SCREEN_MAX_COLS           160
+#define SCREEN_MIN_ROWS           12
+#define SCREEN_MAX_ROWS           60
+#define SCREEN_DEFAULT_COLS       80
+#define SCREEN_DEFAULT_ROWS       24
 #define BODY_FIRST_ROW            4
-#define BODY_ROWS                 18
-#define FOOTER_BORDER_ROW         22
-#define FOOTER_HELP_ROW           23
-#define FOOTER_STATUS_ROW         24
+
+enum view_mode_e
+{
+  VIEW_AUTO,
+  VIEW_80X24,
+  VIEW_100X30,
+  VIEW_120X40
+};
 
 enum gopher_row_type_e
 {
@@ -105,6 +115,79 @@ static struct termios g_saved_termios;
 static bool g_termios_saved;
 static bool g_key_pending;
 static char g_pending_key;
+static enum view_mode_e g_view_mode = VIEW_AUTO;
+static unsigned int g_screen_cols = SCREEN_DEFAULT_COLS;
+static unsigned int g_screen_rows = SCREEN_DEFAULT_ROWS;
+
+static int read_key(void);
+
+static unsigned int body_rows(void)
+{
+  return g_screen_rows - 6;
+}
+
+static unsigned int footer_border_row(void)
+{
+  return g_screen_rows - 2;
+}
+
+static unsigned int footer_help_row(void)
+{
+  return g_screen_rows - 1;
+}
+
+static unsigned int footer_status_row(void)
+{
+  return g_screen_rows;
+}
+
+static void clamp_screen(unsigned int *cols, unsigned int *rows)
+{
+  if (*cols < SCREEN_MIN_COLS) *cols = SCREEN_MIN_COLS;
+  if (*cols > SCREEN_MAX_COLS) *cols = SCREEN_MAX_COLS;
+  if (*rows < SCREEN_MIN_ROWS) *rows = SCREEN_MIN_ROWS;
+  if (*rows > SCREEN_MAX_ROWS) *rows = SCREEN_MAX_ROWS;
+}
+
+static bool update_screen_size(void)
+{
+  unsigned int old_cols = g_screen_cols;
+  unsigned int old_rows = g_screen_rows;
+  unsigned int cols = SCREEN_DEFAULT_COLS;
+  unsigned int rows = SCREEN_DEFAULT_ROWS;
+
+  if (g_view_mode == VIEW_80X24)
+    {
+      cols = 80;
+      rows = 24;
+    }
+  else if (g_view_mode == VIEW_100X30)
+    {
+      cols = 100;
+      rows = 30;
+    }
+  else if (g_view_mode == VIEW_120X40)
+    {
+      cols = 120;
+      rows = 40;
+    }
+  else
+    {
+      struct winsize ws;
+      memset(&ws, 0, sizeof(ws));
+      if (ioctl(STDIN_FILENO, TIOCGWINSZ, (uintptr_t)&ws) == 0 &&
+          ws.ws_col != 0 && ws.ws_row != 0)
+        {
+          cols = ws.ws_col;
+          rows = ws.ws_row;
+        }
+    }
+
+  clamp_screen(&cols, &rows);
+  g_screen_cols = cols;
+  g_screen_rows = rows;
+  return old_cols != cols || old_rows != rows;
+}
 
 static void restore_terminal(void)
 {
@@ -355,7 +438,7 @@ static void add_view_text(const char *text)
       size_t bytes = 0;
       size_t columns = 0;
 
-      while (cursor[bytes] != '\0' && columns < SCREEN_COLS - 4)
+      while (cursor[bytes] != '\0' && columns < g_screen_cols - 4)
         {
           size_t charlen = utf8_length(cursor + bytes);
           if (bytes + charlen >= sizeof(g_rows[0].text))
@@ -513,7 +596,7 @@ static void draw_border(void)
 {
   unsigned int i;
   putchar('+');
-  for (i = 0; i < SCREEN_COLS - 2; i++)
+  for (i = 0; i < g_screen_cols - 2; i++)
     {
       putchar('-');
     }
@@ -557,7 +640,7 @@ static void draw_framed_text(const char *text, bool selected)
       printf("\033[7m");
     }
 
-  draw_padded_text(text, SCREEN_COLS - 4);
+  draw_padded_text(text, g_screen_cols - 4);
 
   if (selected)
     {
@@ -592,9 +675,9 @@ static void keep_selection_visible(unsigned int selected,
         {
           *top_row = (unsigned int)row;
         }
-      else if ((unsigned int)row >= *top_row + BODY_ROWS)
+      else if ((unsigned int)row >= *top_row + body_rows())
         {
-          *top_row = (unsigned int)row - BODY_ROWS + 1;
+          *top_row = (unsigned int)row - body_rows() + 1;
         }
     }
 }
@@ -609,12 +692,12 @@ static void draw_screen(const struct gopher_location_s *location,
   unsigned int page_number;
 
   make_url(location, url, sizeof(url));
-  page_count = (g_row_count + BODY_ROWS - 1) / BODY_ROWS;
+  page_count = (g_row_count + body_rows() - 1) / body_rows();
   if (page_count == 0)
     {
       page_count = 1;
     }
-  page_number = top_row / BODY_ROWS + 1;
+  page_number = top_row / body_rows() + 1;
 
   printf("\033[2J\033[H\033[0m");
   draw_border();
@@ -623,7 +706,7 @@ static void draw_screen(const struct gopher_location_s *location,
   printf("\033[3;1H");
   draw_border();
 
-  for (row = 0; row < BODY_ROWS; row++)
+  for (row = 0; row < body_rows(); row++)
     {
       unsigned int view_index = top_row + row;
       bool selected = false;
@@ -647,30 +730,98 @@ static void draw_screen(const struct gopher_location_s *location,
         }
     }
 
-  printf("\033[%u;1H", FOOTER_BORDER_ROW);
+  printf("\033[%u;1H", footer_border_row());
   draw_border();
-  printf("\033[%u;1H", FOOTER_HELP_ROW);
+  printf("\033[%u;1H", footer_help_row());
   if (is_menu)
     {
-      draw_framed_text("Fel/le: valasztas   Tab: kovetkezo   Enter/jobbra: megnyit",
+      draw_framed_text("Fel/le: valasztas  Tab: kovetkezo  Enter/jobbra: megnyit  v: nezet",
                        false);
     }
   else
     {
-      draw_framed_text("Balra/b: vissza   q: kilepes   PgUp/PgDn: lapozas",
+      draw_framed_text("Balra/b: vissza  q: kilepes  PgUp/PgDn: lapozas  v: nezet",
                        false);
     }
 
   {
-    char footer[77];
+    char footer[SCREEN_MAX_COLS];
     snprintf(footer, sizeof(footer),
-             "%.6s | %u/%u | %.42s",
+             "%.6s | %u/%u | %.96s",
              is_menu ? "Menu" : "Szoveg", page_number, page_count,
              message == NULL ? "" : message);
-    printf("\033[%u;1H", FOOTER_STATUS_ROW);
+    printf("\033[%u;1H", footer_status_row());
     draw_framed_text(footer, false);
     fflush(stdout);
   }
+}
+
+static bool choose_view_mode(const struct gopher_location_s *location)
+{
+  static const char *labels[] =
+  {
+    "Automatikus (Telnet meret, ha elerheto)",
+    "80 x 24",
+    "100 x 30",
+    "120 x 40"
+  };
+  unsigned int selected = (unsigned int)g_view_mode;
+
+  for (;;)
+    {
+      unsigned int i;
+      int key;
+      char url[120];
+
+      make_url(location, url, sizeof(url));
+      printf("\033[2J\033[H\033[0m");
+      draw_border();
+      printf("\033[2;1H");
+      draw_framed_text(url, false);
+      printf("\033[3;1H");
+      draw_border();
+      printf("\033[4;1H");
+      draw_framed_text("Helyi kijelzonezet — csak a kliens elrendezeset allitja",
+                       false);
+      for (i = 0; i < 4; i++)
+        {
+          char line[SCREEN_MAX_COLS];
+          snprintf(line, sizeof(line), "%c %s%s", i == selected ? '>' : ' ',
+                   labels[i], i == (unsigned int)g_view_mode ? "  [aktiv]" : "");
+          printf("\033[%u;1H", 5 + i);
+          draw_framed_text(line, i == selected);
+        }
+
+      printf("\033[%u;1H", footer_border_row());
+      draw_border();
+      printf("\033[%u;1H", footer_help_row());
+      draw_framed_text("Fel/le: valasztas  Enter: alkalmaz  Esc/b: vissza",
+                       false);
+      printf("\033[%u;1H", footer_status_row());
+      draw_framed_text("A fix meret csak erre a futasra ervenyes.", false);
+      fflush(stdout);
+
+      key = read_key();
+      if (key < 0 || key == 0x1b || key == 'b' || key == 'B')
+        {
+          return false;
+        }
+      if (key == KEY_UP || key == KEY_BACKTAB)
+        {
+          selected = selected == 0 ? 3 : selected - 1;
+        }
+      else if (key == KEY_DOWN || key == '\t')
+        {
+          selected = (selected + 1) % 4;
+        }
+      else if (key == '\n' || key == KEY_RIGHT)
+        {
+          enum view_mode_e previous = g_view_mode;
+          g_view_mode = (enum view_mode_e)selected;
+          update_screen_size();
+          return previous != g_view_mode || selected == VIEW_AUTO;
+        }
+    }
 }
 
 static int read_byte(char *ch)
@@ -795,7 +946,7 @@ static int read_search(char *query, size_t capacity)
       int key;
 
       snprintf(prompt, sizeof(prompt), "Kereses: %s", query);
-      printf("\033[%u;1H", FOOTER_STATUS_ROW);
+      printf("\033[%u;1H", footer_status_row());
       draw_framed_text(prompt, false);
       fflush(stdout);
 
@@ -857,7 +1008,7 @@ static void select_item(const struct gopher_location_s *current,
       int n;
 
       snprintf(prompt, sizeof(prompt), "Kereses: ");
-      printf("\033[%u;1H", FOOTER_STATUS_ROW);
+      printf("\033[%u;1H", footer_status_row());
       draw_framed_text(prompt, false);
       fflush(stdout);
 
@@ -904,6 +1055,7 @@ int main(int argc, FAR char *argv[])
   current.port = GOPHER_DEFAULT_PORT;
   g_history_count = 0;
   setup_terminal();
+  update_screen_size();
   atexit(restore_terminal);
 
   for (;;)
@@ -932,9 +1084,18 @@ int main(int argc, FAR char *argv[])
       top_row = 0;
       keep_selection_visible(selected, &top_row);
 
+      {
+        bool refresh_page = false;
       for (;;)
         {
           int key;
+
+          if (g_view_mode == VIEW_AUTO && update_screen_size())
+            {
+              refresh_page = true;
+              break;
+            }
+
           draw_screen(&current, is_menu, top_row,
                       g_item_count == 0 ? -1 : (int)selected, message);
           key = read_key();
@@ -942,6 +1103,17 @@ int main(int argc, FAR char *argv[])
             {
               restore_terminal();
               return 0;
+            }
+
+          if (key == 'v' || key == 'V')
+            {
+              refresh_page = choose_view_mode(&current);
+              if (refresh_page)
+                {
+                  break;
+                }
+
+              continue;
             }
 
           if (key == 'b' || key == 'B' || key == KEY_LEFT)
@@ -960,11 +1132,12 @@ int main(int argc, FAR char *argv[])
             {
               if (key == KEY_PAGE_UP)
                 {
-                  top_row = top_row > BODY_ROWS ? top_row - BODY_ROWS : 0;
+                  top_row = top_row > body_rows() ?
+                            top_row - body_rows() : 0;
                 }
-              else if (top_row + BODY_ROWS < g_row_count)
+              else if (top_row + body_rows() < g_row_count)
                 {
-                  top_row += BODY_ROWS;
+                  top_row += body_rows();
                 }
 
               continue;
@@ -1029,5 +1202,11 @@ int main(int argc, FAR char *argv[])
               break;
             }
         }
+
+        if (refresh_page)
+          {
+            continue;
+          }
+      }
     }
 }
