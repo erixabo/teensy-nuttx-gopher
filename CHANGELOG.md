@@ -9,3 +9,5 @@
 - Telnet-soros Enter/escape feldolgozás és várakozás javítása.
 - Élő Teensy 4.1-en ellenőrizve: menü, helyi szöveges oldal, lapozás, ékezetek,
   visszalépés, kilépés és a Telnet-kapcsolat újranyitása.
+- A Telnet nyers módú karakteres navigációjához szükséges NuttX SGA-egyeztetés
+  a `teensy4-nuttx` repóban kapott javítást.

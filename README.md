@@ -30,6 +30,12 @@ fában, majd válaszd ki a `CONFIG_NETUTILS_GOPHER` opciót. A Teensy 4.1
 Követelmények: IPv4 TCP és DNS (`NET`, `NET_TCP`, `LIBC_NETDB`). A kliens az
 NSH előterében fut, mert közvetlenül olvassa a billentyűzetet.
 
+Soros konzolon és Telneten is karakterenkénti bevitelt használ. Ehhez a NuttX
+Telnet driver nyers terminálmódú `SUPPRESS-GO-AHEAD` egyeztetése szükséges; a
+Teensy buildhez ezt a driverjavítást a `teensy4-nuttx` repó tartalmazza. Enélkül
+a Telnet kliens sorpufferelése miatt a nyilak csak Enter után jutnak el az
+alkalmazáshoz.
+
 ## Teensy 4.1 feltöltése
 
 A firmware-ben lévő USB CDC hook 134 baud beállításakor HalfKay módba kéri a
