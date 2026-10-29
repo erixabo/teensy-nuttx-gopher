@@ -1,0 +1,28 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config NETUTILS_GOPHER
+	tristate "Gopher menu client"
+	default n
+	depends on NET && NET_TCP && LIBC_NETDB
+	---help---
+		Enable a small interactive Gopher client for NSH.  With no
+		arguments it opens the ERIXABO Gopher home page on the Oracle host.
+
+if NETUTILS_GOPHER
+
+config NETUTILS_GOPHER_PROGNAME
+	string "Program name"
+	default "gopher"
+
+config NETUTILS_GOPHER_PRIORITY
+	int "Task priority"
+	default 100
+
+config NETUTILS_GOPHER_STACKSIZE
+	int "Task stack size"
+	default 4096
+
+endif

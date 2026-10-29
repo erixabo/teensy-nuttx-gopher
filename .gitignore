@@ -1,0 +1,10 @@
+*.o
+*.a
+*.hex
+*.elf
+*.map
+.built
+.depend
+Make.dep
+__pycache__/
+.DS_Store

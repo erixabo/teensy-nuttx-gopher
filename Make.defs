@@ -1,0 +1,3 @@
+ifneq ($(CONFIG_NETUTILS_GOPHER),)
+CONFIGURED_APPS += $(APPDIR)/netutils/gopher
+endif
