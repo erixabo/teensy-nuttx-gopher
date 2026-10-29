@@ -47,6 +47,7 @@
 #define SCREEN_DEFAULT_COLS       80
 #define SCREEN_DEFAULT_ROWS       24
 #define BODY_FIRST_ROW            4
+#define SCREEN_OUTPUT_BUFFER_SIZE 20480
 
 enum view_mode_e
 {
@@ -118,6 +119,7 @@ static char g_pending_key;
 static enum view_mode_e g_view_mode = VIEW_AUTO;
 static unsigned int g_screen_cols = SCREEN_DEFAULT_COLS;
 static unsigned int g_screen_rows = SCREEN_DEFAULT_ROWS;
+static char g_screen_output_buffer[SCREEN_OUTPUT_BUFFER_SIZE];
 
 static int read_key(void);
 
@@ -650,6 +652,28 @@ static void draw_framed_text(const char *text, bool selected)
   printf(" |");
 }
 
+static void draw_body_row(unsigned int display_row, unsigned int view_index,
+                          int selected_item)
+{
+  bool selected = false;
+
+  if (view_index < g_row_count)
+    {
+      const char *text = g_rows[view_index].text;
+
+      selected = selected_item >= 0 &&
+                 g_rows[view_index].type == GOPHER_ROW_ITEM &&
+                 g_rows[view_index].item_index == (unsigned int)selected_item;
+      printf("\033[%u;1H", display_row);
+      draw_framed_text(text, selected);
+    }
+  else
+    {
+      printf("\033[%u;1H", display_row);
+      draw_framed_text("", false);
+    }
+}
+
 static int find_item_row(unsigned int item_index)
 {
   unsigned int i;
@@ -709,25 +733,7 @@ static void draw_screen(const struct gopher_location_s *location,
   for (row = 0; row < body_rows(); row++)
     {
       unsigned int view_index = top_row + row;
-      bool selected = false;
-
-      if (view_index < g_row_count)
-        {
-          const char *text = g_rows[view_index].text;
-          if (g_rows[view_index].type == GOPHER_ROW_ITEM &&
-              g_rows[view_index].item_index == (unsigned int)selected_item)
-            {
-              selected = true;
-            }
-
-          printf("\033[%u;1H", BODY_FIRST_ROW + row);
-          draw_framed_text(text, selected);
-        }
-      else
-        {
-          printf("\033[%u;1H", BODY_FIRST_ROW + row);
-          draw_framed_text("", false);
-        }
+      draw_body_row(BODY_FIRST_ROW + row, view_index, selected_item);
     }
 
   printf("\033[%u;1H", footer_border_row());
@@ -1054,6 +1060,19 @@ int main(int argc, FAR char *argv[])
           sizeof(current.selector));
   current.port = GOPHER_DEFAULT_PORT;
   g_history_count = 0;
+
+  /* NuttX defaults to a 64-byte stdio buffer.  Buffer a complete maximum-
+   * size screen so it reaches the Telnet driver as one write instead of
+   * dozens of tiny writes.  The driver divides that write into network
+   * chunks. */
+
+  if (setvbuf(stdout, g_screen_output_buffer, _IOFBF,
+              sizeof(g_screen_output_buffer)) != 0)
+    {
+      fprintf(stderr, "Nem sikerult a kepernyopuffer beallitasa.\n");
+      return 1;
+    }
+
   setup_terminal();
   update_screen_size();
   atexit(restore_terminal);
@@ -1086,9 +1105,16 @@ int main(int argc, FAR char *argv[])
 
       {
         bool refresh_page = false;
+        bool screen_drawn = false;
+        unsigned int drawn_top_row = 0;
+        int drawn_selected = -2;
+        char drawn_message[sizeof(message)];
+
+        drawn_message[0] = '\0';
       for (;;)
         {
           int key;
+          int selected_item = g_item_count == 0 ? -1 : (int)selected;
 
           if (g_view_mode == VIEW_AUTO && update_screen_size())
             {
@@ -1096,8 +1122,37 @@ int main(int argc, FAR char *argv[])
               break;
             }
 
-          draw_screen(&current, is_menu, top_row,
-                      g_item_count == 0 ? -1 : (int)selected, message);
+          if (!screen_drawn || drawn_top_row != top_row ||
+              strcmp(drawn_message, message) != 0)
+            {
+              draw_screen(&current, is_menu, top_row, selected_item, message);
+              screen_drawn = true;
+              drawn_top_row = top_row;
+              drawn_selected = selected_item;
+              strlcpy(drawn_message, message, sizeof(drawn_message));
+            }
+          else if (is_menu && drawn_selected != selected_item)
+            {
+              int old_row = find_item_row((unsigned int)drawn_selected);
+              int new_row = find_item_row((unsigned int)selected_item);
+
+              if (old_row >= (int)top_row &&
+                  old_row < (int)(top_row + body_rows()))
+                {
+                  draw_body_row(BODY_FIRST_ROW + old_row - top_row,
+                                (unsigned int)old_row, -1);
+                }
+
+              if (new_row >= (int)top_row &&
+                  new_row < (int)(top_row + body_rows()))
+                {
+                  draw_body_row(BODY_FIRST_ROW + new_row - top_row,
+                                (unsigned int)new_row, selected_item);
+                }
+
+              fflush(stdout);
+              drawn_selected = selected_item;
+            }
           key = read_key();
           if (key < 0 || key == 'q' || key == 'Q' || key == 0x03)
             {
@@ -1107,6 +1162,7 @@ int main(int argc, FAR char *argv[])
 
           if (key == 'v' || key == 'V')
             {
+              screen_drawn = false;
               refresh_page = choose_view_mode(&current);
               if (refresh_page)
                 {

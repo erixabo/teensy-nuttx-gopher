@@ -22,6 +22,12 @@ megnyitja a kijelölt elemet. Balra nyíl vagy `b` visszalép, `q` vagy Ctrl-C
 kilép. Hosszú menü és szöveges oldal PgUp/PgDn billentyűkkel lapozható; Home/End
 a menü elejére/végére ugrik. A Gopher type 7 kereséshez külön beviteli mező van.
 
+A képernyő kimenete 20 KiB-os alkalmazásszintű pufferbe gyűlik, mielőtt a
+Telnet drivernek átadja; ez kiváltja a NuttX alapértelmezett 64 bájtos stdio
+pufferéből adódó sok apró írást. A menüben a kijelölés mozgatása csak az előző
+és az új sort rajzolja újra. Lapváltáskor és görgetéskor továbbra is teljes
+képernyőfrissítés történik.
+
 Az információs sorok protokollmezői (`0`/`1`, `null.host`, port) nem jelennek
 meg. A szöveg levágása és kitöltése UTF-8 karakterhatáron történik, így az
 ékezetes karakterek nem csúsztatják el az oszlopokat. Kilépéskor a kliens
